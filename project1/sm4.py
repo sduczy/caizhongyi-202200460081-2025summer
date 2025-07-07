@@ -50,17 +50,26 @@ def tau(a):
         b |= SBOX[(a >> (24 - i * 8)) & 0xFF] << (24 - i * 8)
     return b
 
-def L(b):
-    return b ^ rotl(b, 2) ^ rotl(b, 10) ^ rotl(b, 18) ^ rotl(b, 24)
-
-def L_prime(b):
-    return b ^ rotl(b, 13) ^ rotl(b, 23)
-
 def T(x):
-    return L(tau(x))
+    # inline tau and L
+    a = (
+        SBOX[(x >> 24) & 0xFF] << 24 |
+        SBOX[(x >> 16) & 0xFF] << 16 |
+        SBOX[(x >> 8) & 0xFF] << 8 |
+        SBOX[x & 0xFF]
+    )
+    return a ^ rotl(a, 2) ^ rotl(a, 10) ^ rotl(a, 18) ^ rotl(a, 24)
 
+#优化掉嵌套的函数，加快调用速度
 def T_prime(x):
-    return L_prime(tau(x))
+    a = (
+        SBOX[(x >> 24) & 0xFF] << 24 |
+        SBOX[(x >> 16) & 0xFF] << 16 |
+        SBOX[(x >> 8) & 0xFF] << 8 |
+        SBOX[x & 0xFF]
+    )
+    return a ^ rotl(a, 13) ^ rotl(a, 23)
+
 
 def key_expansion(key):
     MK = struct.unpack(">4I", key)
@@ -72,12 +81,15 @@ def key_expansion(key):
         K.append(temp)
     return rk
 
+
+#改为环形缓冲区
 def encrypt_block(block, rk):
     X = list(struct.unpack(">4I", block))
     for i in range(32):
-        temp = X[i] ^ T(X[i+1] ^ X[i+2] ^ X[i+3] ^ rk[i])
-        X.append(temp)
-    return struct.pack(">4I", X[35], X[34], X[33], X[32])
+        tmp = X[0] ^ T(X[1] ^ X[2] ^ X[3] ^ rk[i])
+        X = [X[1], X[2], X[3], tmp]
+    return struct.pack(">4I", X[3], X[2], X[1], X[0])
+
 
 def decrypt_block(block, rk):
     return encrypt_block(block, rk[::-1])
