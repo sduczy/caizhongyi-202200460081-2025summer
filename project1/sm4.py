@@ -1,4 +1,4 @@
-# sm4.py
+# sm4_fast.py
 import struct
 
 # 固定S盒
@@ -44,12 +44,6 @@ CK = [0x00070e15 + 0x070e151c * i for i in range(32)]  # 简化写法
 def rotl(x, n):
     return ((x << n) | (x >> (32 - n))) & 0xFFFFFFFF
 
-def tau(a):
-    b = 0
-    for i in range(4):
-        b |= SBOX[(a >> (24 - i * 8)) & 0xFF] << (24 - i * 8)
-    return b
-
 def T(x):
     # inline tau and L
     a = (
@@ -60,7 +54,7 @@ def T(x):
     )
     return a ^ rotl(a, 2) ^ rotl(a, 10) ^ rotl(a, 18) ^ rotl(a, 24)
 
-#优化掉嵌套的函数，加快调用速度
+# 优化：T_prime函数手动展开，提高速度
 def T_prime(x):
     a = (
         SBOX[(x >> 24) & 0xFF] << 24 |
@@ -70,29 +64,34 @@ def T_prime(x):
     )
     return a ^ rotl(a, 13) ^ rotl(a, 23)
 
-
-def key_expansion(key):
-    MK = struct.unpack(">4I", key)
-    K = [MK[i] ^ FK[i] for i in range(4)]
-    rk = []
-    for i in range(32):
-        temp = K[i] ^ T_prime(K[i + 1] ^ K[i + 2] ^ K[i + 3] ^ CK[i])
-        rk.append(temp)
-        K.append(temp)
-    return rk
-
-
-#改为环形缓冲区
+# 优化：使用局部变量代替列表操作，减少内存复制
 def encrypt_block(block, rk):
-    X = list(struct.unpack(">4I", block))
+    X0, X1, X2, X3 = struct.unpack(">4I", block)
     for i in range(32):
-        tmp = X[0] ^ T(X[1] ^ X[2] ^ X[3] ^ rk[i])
-        X = [X[1], X[2], X[3], tmp]
-    return struct.pack(">4I", X[3], X[2], X[1], X[0])
-
+        tmp = X0 ^ T(X1 ^ X2 ^ X3 ^ rk[i])
+        X0, X1, X2, X3 = X1, X2, X3, tmp
+    return struct.pack(">4I", X3, X2, X1, X0)
 
 def decrypt_block(block, rk):
     return encrypt_block(block, rk[::-1])
+
+def key_expansion(key):
+    # 优化：使用局部变量展开，避免不必要的数组操作
+    MK = struct.unpack(">4I", key)
+    K0, K1, K2, K3 = [MK[i] ^ FK[i] for i in range(4)]
+    rk = []
+    for i in range(32):
+        temp = K1 ^ K2 ^ K3 ^ CK[i]
+        a = (
+            SBOX[(temp >> 24) & 0xFF] << 24 |
+            SBOX[(temp >> 16) & 0xFF] << 16 |
+            SBOX[(temp >> 8) & 0xFF] << 8 |
+            SBOX[temp & 0xFF]
+        )
+        rk_i = K0 ^ a ^ rotl(a, 13) ^ rotl(a, 23)
+        rk.append(rk_i)
+        K0, K1, K2, K3 = K1, K2, K3, rk_i
+    return rk
 
 def pad(data):
     pad_len = 16 - (len(data) % 16)
@@ -102,25 +101,26 @@ def unpad(data):
     pad_len = data[-1]
     return data[:-pad_len]
 
+# 优化：使用bytearray避免字符串拼接开销
 def sm4_encrypt(data, key):
     rk = key_expansion(key)
     data = pad(data)
-    ciphertext = b''
+    ciphertext = bytearray()
     for i in range(0, len(data), 16):
-        ciphertext += encrypt_block(data[i:i+16], rk)
-    return ciphertext
+        ciphertext.extend(encrypt_block(data[i:i+16], rk))
+    return bytes(ciphertext)
 
 def sm4_decrypt(data, key):
     rk = key_expansion(key)
-    plaintext = b''
+    plaintext = bytearray()
     for i in range(0, len(data), 16):
-        plaintext += decrypt_block(data[i:i+16], rk)
-    return unpad(plaintext)
+        plaintext.extend(decrypt_block(data[i:i+16], rk))
+    return unpad(bytes(plaintext))
 
 # ==== 测试 ====
 if __name__ == "__main__":
     key = b"0123456789abcdef"
-    data = b"Hello SM4 Encryption!"
+    data = b"Hello SM4  2025summer"
     print("原文:", data)
 
     enc = sm4_encrypt(data, key)
