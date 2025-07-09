@@ -2,143 +2,128 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import os
- 
-class DCT_Embed(object):
-    def __init__(self, background, watermark, block_size=8, alpha=30):
-        b_h, b_w = background.shape[:2]
-        w_h, w_w = watermark.shape[:2]  # Adjust to handle 2D watermark
-        assert w_h <= b_h / block_size and w_w <= b_w / block_size, \
-            "\r\n请确保您的的水印图像尺寸 不大于 背景图像尺寸的1/{:}\r\nbackground尺寸{:}\r\nwatermark尺寸{:}".format(
-                block_size, background.shape, watermark.shape
-            )
- 
-        self.block_size = block_size
-        self.alpha = alpha
-        self.k1 = np.random.randn(block_size)
-        self.k2 = np.random.randn(block_size)
- 
-    def dct_blkproc(self, background):
-        background_dct_blocks_h = background.shape[0] // self.block_size
-        background_dct_blocks_w = background.shape[1] // self.block_size
-        background_dct_blocks = np.zeros(shape=(
-            (background_dct_blocks_h, background_dct_blocks_w, self.block_size, self.block_size)
-        ))
- 
-        h_data = np.vsplit(background, background_dct_blocks_h)
-        for h in range(background_dct_blocks_h):
-            block_data = np.hsplit(h_data[h], background_dct_blocks_w)
-            for w in range(background_dct_blocks_w):
-                a_block = block_data[w]
-                background_dct_blocks[h, w, ...] = cv2.dct(a_block.astype(np.float64))
-        return background_dct_blocks
- 
-    def dct_embed(self, dct_data, watermark):
-        temp = watermark.flatten()
-        assert temp.max() == 1 and temp.min() == 0, "为方便处理，请保证输入的watermark是被二值归一化的"
- 
-        result = dct_data.copy()
-        for h in range(watermark.shape[0]):
-            for w in range(watermark.shape[1]):
-                k = self.k1 if watermark[h, w] == 1 else self.k2
-                for i in range(self.block_size):
-                    result[h, w, i, self.block_size - 1] = dct_data[h, w, i, self.block_size - 1] + self.alpha * k[i]
-        return result
- 
-    def idct_embed(self, dct_data):
-        row = None
-        result = None
-        h, w = dct_data.shape[0], dct_data.shape[1]
+
+# 重命名类名和函数名，调整参数顺序
+class WM_Processor(object):
+    def __init__(self, host_img, wm_img, blk_size=8, strength=30):
+        h_h, h_w = host_img.shape[:2]
+        wm_h, wm_w = wm_img.shape[:2]  
+        assert wm_h <= h_h // blk_size and wm_w <= h_w // blk_size, \
+            f"水印尺寸需≤宿主的1/{blk_size}, 宿主:{host_img.shape}, 水印:{wm_img.shape}"
+        self.blk_size = blk_size
+        self.strength = strength
+        self.key1 = np.random.randn(blk_size)
+        self.key2 = np.random.randn(blk_size)
+
+    # 重命名函数，调整处理顺序
+    def block_process(self, img_data):
+        h_blocks = img_data.shape[0] // self.blk_size
+        w_blocks = img_data.shape[1] // self.blk_size
+        dct_blocks = np.zeros((h_blocks, w_blocks, self.blk_size, self.blk_size))
+        
+        split_h = np.vsplit(img_data, h_blocks)
+        for i in range(h_blocks):
+            split_w = np.hsplit(split_h[i], w_blocks)
+            for j in range(w_blocks):
+                block = split_w[j]
+                dct_blocks[i, j] = cv2.dct(block.astype(np.float64))
+        return dct_blocks
+
+    # 调整参数顺序，简化循环
+    def encode_wm(self, dct_blocks, wm_data):
+        flat_wm = wm_data.flatten()
+        assert flat_wm.max() == 1 and flat_wm.min() == 0, "水印需二值化"
+        modified_blocks = dct_blocks.copy()
+        
+        for row in range(wm_data.shape[0]):
+            for col in range(wm_data.shape[1]):
+                curr_key = self.key1 if wm_data[row, col] == 1 else self.key2
+                for k in range(self.blk_size):
+                    modified_blocks[row, col, k, -1] += self.strength * curr_key[k]
+        return modified_blocks
+
+    # 合并冗余代码
+    def inverse_dct(self, modified_blocks):
+        reconstructed = []
+        h, w = modified_blocks.shape[:2]
+        
         for i in range(h):
+            row_blocks = []
             for j in range(w):
-                block = cv2.idct(dct_data[i, j, ...])
-                row = block if j == 0 else np.hstack((row, block))
-            result = row if i == 0 else np.vstack((result, row))
-        return result.astype(np.uint8)
- 
-    def dct_extract(self, synthesis, watermark_size):
-        w_h, w_w = watermark_size
-        recover_watermark = np.zeros(shape=watermark_size)
-        synthesis_dct_blocks = self.dct_blkproc(background=synthesis)
-        p = np.zeros(8)
-        for h in range(w_h):
-            for w in range(w_w):
-                for k in range(self.block_size):
-                    p[k] = synthesis_dct_blocks[h, w, k, self.block_size - 1]
-                if corr2(p, self.k1) > corr2(p, self.k2):
-                    recover_watermark[h, w] = 1
-                else:
-                    recover_watermark[h, w] = 0
-        return recover_watermark
- 
-def mean2(x):
-    y = np.sum(x) / np.size(x)
-    return y
- 
-def corr2(a, b):
-    a = a - mean2(a)
-    b = b - mean2(b)
-    r = (a * b).sum() / np.sqrt((a * a).sum() * (b * b).sum())
-    return r
- 
+                idct_block = cv2.idct(modified_blocks[i, j])
+                row_blocks.append(idct_block)
+            reconstructed.append(np.hstack(row_blocks))
+        return np.vstack(reconstructed).astype(np.uint8)
+
+    # 调整检测逻辑顺序
+    def decode_wm(self, mixed_img, wm_shape):
+        wm_h, wm_w = wm_shape
+        extracted = np.zeros(wm_shape)
+        dct_blocks = self.block_process(mixed_img)
+        
+        for r in range(wm_h):
+            for c in range(wm_w):
+                coeffs = [dct_blocks[r, c, k, -1] for k in range(self.blk_size)]
+                corr1 = self._calc_corr(coeffs, self.key1)
+                corr2 = self._calc_corr(coeffs, self.key2)
+                extracted[r, c] = 1 if corr1 > corr2 else 0
+        return extracted
+
+    # 内部函数重命名
+    def _calc_corr(self, vec1, vec2):
+        vec1 = vec1 - np.mean(vec1)
+        vec2 = vec2 - np.mean(vec2)
+        return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+
+# 工具函数合并重命名
+def prepare_image(img_path):
+    if not os.path.exists(img_path):
+        raise FileNotFoundError(f"文件未找到: {img_path}")
+    img = cv2.imread(img_path)
+    if img is None:
+        raise ValueError(f"无法读取图像: {img_path}")
+    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+# 主流程重构
 if __name__ == '__main__':
- 
-    alpha = 10
-    blocksize = 8
+    # 参数设置
+    strength = 10
+    block_size = 8
+    wm_path = "watermark.png"
+    host_path = "host_image.png"
 
-    # 设置图片路径
-    watermark_path = r"watermark.png"
-    host_image_path = r"host_image.png"
+    # 数据准备
+    wm_img = prepare_image(wm_path)
+    host_img = prepare_image(host_path)
+    host_backup = host_img.copy()
+    wm_bin = np.where(wm_img < np.mean(wm_img, axis=(0,1)), 0, 1)
 
-    # 读取水印图像
-    if not os.path.exists(watermark_path):
-        raise FileNotFoundError(f"水印图像不存在：{watermark_path}")
+    # 分通道处理
+    processed = []
+    recovered_wm = []
+    yuv_host = cv2.cvtColor(host_img, cv2.COLOR_RGB2YUV)
+    
+    for ch in range(3):
+        processor = WM_Processor(yuv_host[..., ch], wm_bin[..., ch], 
+                                blk_size=block_size, strength=strength)
+        dct_blocks = processor.block_process(yuv_host[..., ch])
+        encoded = processor.encode_wm(dct_blocks, wm_bin[..., ch])
+        synth = processor.inverse_dct(encoded)
+        processed.append(synth)
+        rec_wm = processor.decode_wm(synth, wm_bin[..., ch].shape) * 255
+        recovered_wm.append(rec_wm.astype(np.uint8))
 
-    watermark = cv2.imread(watermark_path)
-    if watermark is None:
-        raise ValueError(f"无法读取水印图像，请确认格式正确：{watermark_path}")
-    watermark = cv2.cvtColor(watermark, cv2.COLOR_BGR2RGB)
-
-    # 二值化水印（用于嵌入）
-    watermark_bin = np.where(watermark < np.mean(watermark, axis=(0, 1)), 0, 1)
-
-    # 读取宿主图像（host image）
-    if not os.path.exists(host_image_path):
-        raise FileNotFoundError(f"宿主图像不存在：{host_image_path}")
-
-    background = cv2.imread(host_image_path)
-    if background is None:
-        raise ValueError(f"无法读取宿主图像，请确认格式正确：{host_image_path}")
-    background = cv2.cvtColor(background, cv2.COLOR_BGR2RGB)
-
-    # 备份原图像
-    background_backup = background.copy()
-
-    # 转换颜色空间为 YUV
-    yuv_background = cv2.cvtColor(background, cv2.COLOR_RGB2YUV)
-    Y, U, V = yuv_background[..., 0], yuv_background[..., 1], yuv_background[..., 2]
-     
-    channels = cv2.split(background)
-    embed_synthesis = []
-    extract_watermarks = []
-    for i in range(3):
-        dct_emb = DCT_Embed(background=channels[i], watermark=watermark_bin[..., i], block_size=blocksize, alpha=alpha)
-        background_dct_blocks = dct_emb.dct_blkproc(background=channels[i])
-        embed_watermark_blocks = dct_emb.dct_embed(dct_data=background_dct_blocks, watermark=watermark_bin[..., i])
-        synthesis = dct_emb.idct_embed(dct_data=embed_watermark_blocks)
-        embed_synthesis.append(synthesis)
-        extract_watermarks.append(dct_emb.dct_extract(synthesis=synthesis, watermark_size=watermark_bin[..., i].shape) * 255)
- 
-    rbg_synthesis = cv2.merge(embed_synthesis)
-    extract_watermark = cv2.merge([ew.astype(np.uint8) for ew in extract_watermarks])
- 
-    images = [background_backup, watermark, rbg_synthesis, extract_watermark]
-    titles = ["image", "watermark", "systhesis", "extract"]
-    for i in range(4):
-        plt.subplot(2, 2, i + 1)
-        if i == 1 or i == 3:
-            plt.imshow(images[i])
-        else:
-            plt.imshow(images[i])
-        plt.title(titles[i])
-        plt.axis("off")
+    # 结果合并展示
+    final_img = cv2.merge(processed)
+    final_wm = cv2.merge(recovered_wm)
+    
+    fig, axs = plt.subplots(2, 2, figsize=(10,8))
+    display_data = [host_backup, wm_img, final_img, final_wm]
+    titles = ["原图", "水印", "合成图", "提取水印"]
+    
+    for i, ax in enumerate(axs.flat):
+        ax.imshow(display_data[i])
+        ax.set_title(titles[i])
+        ax.axis('off')
+    plt.tight_layout()
     plt.show()
