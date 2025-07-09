@@ -84,6 +84,38 @@ def prepare_image(img_path):
         raise ValueError(f"无法读取图像: {img_path}")
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
+
+def apply_attack(image, attack_type):
+    if attack_type == "gaussian_noise":
+        noise = np.random.normal(0, 10, image.shape).astype(np.int16)
+        return np.clip(image.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+    elif attack_type == "rotate":
+        center = (image.shape[1]//2, image.shape[0]//2)
+        M = cv2.getRotationMatrix2D(center, 10, 1.0)
+        return cv2.warpAffine(image, M, (image.shape[1], image.shape[0]))
+    elif attack_type == "crop":
+        h, w = image.shape[:2]
+        margin = 20
+        cropped = image[margin:h-margin, margin:w-margin]
+        return cv2.resize(cropped, (w, h))
+    elif attack_type == "contrast":
+        return cv2.convertScaleAbs(image, alpha=1.5, beta=0)
+    elif attack_type == "jpeg":
+        _, enc_img = cv2.imencode('.jpg', image, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        return cv2.imdecode(enc_img, 1)
+    elif attack_type == "blur":
+        return cv2.GaussianBlur(image, (5, 5), 1)
+    else:
+        return image
+
+def test_robustness(attacked_img, processor_list, wm_shape):
+    recovered_channels = []
+    yuv_attacked = cv2.cvtColor(attacked_img, cv2.COLOR_RGB2YUV)
+    for ch in range(3):
+        rec_wm = processor_list[ch].decode_wm(yuv_attacked[..., ch], wm_shape[ch]) * 255
+        recovered_channels.append(rec_wm.astype(np.uint8))
+    return cv2.merge(recovered_channels)
+
 # 主流程重构
 if __name__ == '__main__':
     # 参数设置
@@ -127,3 +159,25 @@ if __name__ == '__main__':
         ax.axis('off')
     plt.tight_layout()
     plt.show()
+
+    
+
+
+    # === 添加鲁棒性攻击测试 ===
+    attack_list = ["gaussian_noise", "rotate", "crop", "contrast", "jpeg", "blur"]
+    wm_shape_channels = [wm_bin[..., ch].shape for ch in range(3)]
+
+    for attack in attack_list:
+        attacked_img = apply_attack(final_img, attack)
+        attacked_wm = test_robustness(attacked_img, [processor]*3, wm_shape_channels)
+        
+        fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+        axs[0].imshow(attacked_img)
+        axs[0].set_title(f"攻击后图像 ({attack})")
+        axs[0].axis('off')
+        axs[1].imshow(attacked_wm)
+        axs[1].set_title("提取水印")
+        axs[1].axis('off')
+        plt.tight_layout()
+        plt.show()
+
