@@ -3,181 +3,156 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 
-# 重命名类名和函数名，调整参数顺序
-class WM_Processor(object):
-    def __init__(self, host_img, wm_img, blk_size=8, strength=30):
-        h_h, h_w = host_img.shape[:2]
-        wm_h, wm_w = wm_img.shape[:2]  
+class WatermarkProcessor:
+    def __init__(self, host_channel, wm_channel, blk_size=8, strength=30):
+        h_h, h_w = host_channel.shape
+        wm_h, wm_w = wm_channel.shape
         assert wm_h <= h_h // blk_size and wm_w <= h_w // blk_size, \
-            f"水印尺寸需≤宿主的1/{blk_size}, 宿主:{host_img.shape}, 水印:{wm_img.shape}"
+            f"水印尺寸需≤宿主的1/{blk_size}, 宿主:{host_channel.shape}, 水印:{wm_channel.shape}"
         self.blk_size = blk_size
         self.strength = strength
         self.key1 = np.random.randn(blk_size)
         self.key2 = np.random.randn(blk_size)
 
-    # 重命名函数，调整处理顺序
-    def block_process(self, img_data):
-        h_blocks = img_data.shape[0] // self.blk_size
-        w_blocks = img_data.shape[1] // self.blk_size
+    def _block_dct(self, img):
+        h_blocks = img.shape[0] // self.blk_size
+        w_blocks = img.shape[1] // self.blk_size
         dct_blocks = np.zeros((h_blocks, w_blocks, self.blk_size, self.blk_size))
-        
-        split_h = np.vsplit(img_data, h_blocks)
         for i in range(h_blocks):
-            split_w = np.hsplit(split_h[i], w_blocks)
             for j in range(w_blocks):
-                block = split_w[j]
+                block = img[i*self.blk_size:(i+1)*self.blk_size,
+                            j*self.blk_size:(j+1)*self.blk_size]
                 dct_blocks[i, j] = cv2.dct(block.astype(np.float64))
         return dct_blocks
 
-    # 调整参数顺序，简化循环
-    def encode_wm(self, dct_blocks, wm_data):
-        flat_wm = wm_data.flatten()
-        assert flat_wm.max() == 1 and flat_wm.min() == 0, "水印需二值化"
-        modified_blocks = dct_blocks.copy()
-        
-        for row in range(wm_data.shape[0]):
-            for col in range(wm_data.shape[1]):
-                curr_key = self.key1 if wm_data[row, col] == 1 else self.key2
-                for k in range(self.blk_size):
-                    modified_blocks[row, col, k, -1] += self.strength * curr_key[k]
-        return modified_blocks
-
-    # 合并冗余代码
-    def inverse_dct(self, modified_blocks):
-        reconstructed = []
-        h, w = modified_blocks.shape[:2]
-        
+    def _inverse_dct(self, dct_blocks):
+        h, w = dct_blocks.shape[:2]
+        recon_img = []
         for i in range(h):
-            row_blocks = []
+            row = []
             for j in range(w):
-                idct_block = cv2.idct(modified_blocks[i, j])
-                row_blocks.append(idct_block)
-            reconstructed.append(np.hstack(row_blocks))
-        return np.vstack(reconstructed).astype(np.uint8)
+                row.append(cv2.idct(dct_blocks[i, j]))
+            recon_img.append(np.hstack(row))
+        return np.vstack(recon_img).astype(np.uint8)
 
-    # 调整检测逻辑顺序
-    def decode_wm(self, mixed_img, wm_shape):
-        wm_h, wm_w = wm_shape
-        extracted = np.zeros(wm_shape)
-        dct_blocks = self.block_process(mixed_img)
-        
-        for r in range(wm_h):
-            for c in range(wm_w):
-                coeffs = [dct_blocks[r, c, k, -1] for k in range(self.blk_size)]
-                corr1 = self._calc_corr(coeffs, self.key1)
-                corr2 = self._calc_corr(coeffs, self.key2)
-                extracted[r, c] = 1 if corr1 > corr2 else 0
-        return extracted
+    def embed(self, dct_blocks, wm_bin):
+        assert set(np.unique(wm_bin)) <= {0, 1}, "水印必须是二值图"
+        out = dct_blocks.copy()
+        for i in range(wm_bin.shape[0]):
+            for j in range(wm_bin.shape[1]):
+                key = self.key1 if wm_bin[i, j] == 1 else self.key2
+                out[i, j, :, -1] += self.strength * key
+        return out
 
-    # 内部函数重命名
-    def _calc_corr(self, vec1, vec2):
-        vec1 = vec1 - np.mean(vec1)
-        vec2 = vec2 - np.mean(vec2)
-        return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+    def extract(self, mixed_img, wm_shape):
+        dct_blocks = self._block_dct(mixed_img)
+        wm_extracted = np.zeros(wm_shape)
+        for i in range(wm_shape[0]):
+            for j in range(wm_shape[1]):
+                coeffs = dct_blocks[i, j, :, -1]
+                c1 = self._correlate(coeffs, self.key1)
+                c2 = self._correlate(coeffs, self.key2)
+                wm_extracted[i, j] = 1 if c1 > c2 else 0
+        return wm_extracted
 
-# 工具函数合并重命名
-def prepare_image(img_path):
-    if not os.path.exists(img_path):
-        raise FileNotFoundError(f"文件未找到: {img_path}")
-    img = cv2.imread(img_path)
+    def _correlate(self, vec1, vec2):
+        v1 = vec1 - np.mean(vec1)
+        v2 = vec2 - np.mean(vec2)
+        return np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
+
+# 工具函数
+def load_image(path):
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"图像未找到: {path}")
+    img = cv2.imread(path)
     if img is None:
-        raise ValueError(f"无法读取图像: {img_path}")
+        raise ValueError(f"图像加载失败: {path}")
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
+def apply_attack(img, method):
+    if method == "gaussian_noise":
+        noise = np.random.normal(0, 10, img.shape).astype(np.int16)
+        return np.clip(img.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+    elif method == "rotate":
+        M = cv2.getRotationMatrix2D((img.shape[1]//2, img.shape[0]//2), 10, 1)
+        return cv2.warpAffine(img, M, (img.shape[1], img.shape[0]))
+    elif method == "crop":
+        h, w = img.shape[:2]
+        return cv2.resize(img[20:h-20, 20:w-20], (w, h))
+    elif method == "contrast":
+        return cv2.convertScaleAbs(img, alpha=1.5, beta=0)
+    elif method == "jpeg":
+        _, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        return cv2.imdecode(buf, 1)
+    elif method == "blur":
+        return cv2.GaussianBlur(img, (5, 5), 1)
+    return img
 
-def apply_attack(image, attack_type):
-    if attack_type == "gaussian_noise":
-        noise = np.random.normal(0, 10, image.shape).astype(np.int16)
-        return np.clip(image.astype(np.int16) + noise, 0, 255).astype(np.uint8)
-    elif attack_type == "rotate":
-        center = (image.shape[1]//2, image.shape[0]//2)
-        M = cv2.getRotationMatrix2D(center, 10, 1.0)
-        return cv2.warpAffine(image, M, (image.shape[1], image.shape[0]))
-    elif attack_type == "crop":
-        h, w = image.shape[:2]
-        margin = 20
-        cropped = image[margin:h-margin, margin:w-margin]
-        return cv2.resize(cropped, (w, h))
-    elif attack_type == "contrast":
-        return cv2.convertScaleAbs(image, alpha=1.5, beta=0)
-    elif attack_type == "jpeg":
-        _, enc_img = cv2.imencode('.jpg', image, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-        return cv2.imdecode(enc_img, 1)
-    elif attack_type == "blur":
-        return cv2.GaussianBlur(image, (5, 5), 1)
-    else:
-        return image
-
-def test_robustness(attacked_img, processor_list, wm_shape):
-    recovered_channels = []
-    yuv_attacked = cv2.cvtColor(attacked_img, cv2.COLOR_RGB2YUV)
+def test_robustness(attacked_img, processors, wm_shapes):
+    yuv = cv2.cvtColor(attacked_img, cv2.COLOR_RGB2YUV)
+    recovered = []
     for ch in range(3):
-        rec_wm = processor_list[ch].decode_wm(yuv_attacked[..., ch], wm_shape[ch]) * 255
-        recovered_channels.append(rec_wm.astype(np.uint8))
-    return cv2.merge(recovered_channels)
+        wm = processors[ch].extract(yuv[..., ch], wm_shapes[ch]) * 255
+        recovered.append(wm.astype(np.uint8))
+    return cv2.merge(recovered)
 
-# 主流程重构
-if __name__ == '__main__':
-    # 参数设置
+# 主流程
+if __name__ == "__main__":
     strength = 10
-    block_size = 8
-    wm_path = "watermark.png"
+    blk_size = 8
     host_path = "host_image.png"
+    wm_path = "watermark.png"
 
-    # 数据准备
-    wm_img = prepare_image(wm_path)
-    host_img = prepare_image(host_path)
-    host_backup = host_img.copy()
-    wm_bin = np.where(wm_img < np.mean(wm_img, axis=(0,1)), 0, 1)
+    host = load_image(host_path)
+    wm = load_image(wm_path)
+    wm_bin = np.where(wm < np.mean(wm, axis=(0,1)), 0, 1)
 
-    # 分通道处理
-    processed = []
-    recovered_wm = []
-    yuv_host = cv2.cvtColor(host_img, cv2.COLOR_RGB2YUV)
-    
+    yuv = cv2.cvtColor(host, cv2.COLOR_RGB2YUV)
+    watermarked_channels = []
+    recovered_channels = []
+    processors = []
+
     for ch in range(3):
-        processor = WM_Processor(yuv_host[..., ch], wm_bin[..., ch], 
-                                blk_size=block_size, strength=strength)
-        dct_blocks = processor.block_process(yuv_host[..., ch])
-        encoded = processor.encode_wm(dct_blocks, wm_bin[..., ch])
-        synth = processor.inverse_dct(encoded)
-        processed.append(synth)
-        rec_wm = processor.decode_wm(synth, wm_bin[..., ch].shape) * 255
-        recovered_wm.append(rec_wm.astype(np.uint8))
+        proc = WatermarkProcessor(yuv[..., ch], wm_bin[..., ch], blk_size, strength)
+        dct = proc._block_dct(yuv[..., ch])
+        encoded = proc.embed(dct, wm_bin[..., ch])
+        img = proc._inverse_dct(encoded)
+        rec = proc.extract(img, wm_bin[..., ch].shape) * 255
 
-    # 结果合并展示
-    final_img = cv2.merge(processed)
-    final_wm = cv2.merge(recovered_wm)
-    
-    fig, axs = plt.subplots(2, 2, figsize=(10,8))
-    display_data = [host_backup, wm_img, final_img, final_wm]
-    titles = ["原图", "水印", "合成图", "提取水印"]
-    
-    for i, ax in enumerate(axs.flat):
-        ax.imshow(display_data[i])
-        ax.set_title(titles[i])
-        ax.axis('off')
+        processors.append(proc)
+        watermarked_channels.append(img)
+        recovered_channels.append(rec.astype(np.uint8))
+
+    final_img = cv2.merge(watermarked_channels)
+    final_wm = cv2.merge(recovered_channels)
+
+    # 展示原始水印与水印图像
+    fig, axs = plt.subplots(2, 2, figsize=(10, 8))
+    titles = ["原图", "水印", "嵌入图", "提取水印"]
+    images = [host, wm, final_img, final_wm]
+    for ax, img, title in zip(axs.flat, images, titles):
+        ax.imshow(img)
+        ax.set_title(title)
+        ax.axis("off")
     plt.tight_layout()
     plt.show()
 
-    
+    # 鲁棒性测试
+    attacks = ["gaussian_noise", "rotate", "crop", "contrast", "jpeg", "blur"]
+    wm_shapes = [wm_bin[..., i].shape for i in range(3)]
 
+    for attack in attacks:
+        attacked = apply_attack(final_img, attack)
+        recovered = test_robustness(attacked, processors, wm_shapes)
 
-    # === 添加鲁棒性攻击测试 ===
-    attack_list = ["gaussian_noise", "rotate", "crop", "contrast", "jpeg", "blur"]
-    wm_shape_channels = [wm_bin[..., ch].shape for ch in range(3)]
-
-    for attack in attack_list:
-        attacked_img = apply_attack(final_img, attack)
-        attacked_wm = test_robustness(attacked_img, [processor]*3, wm_shape_channels)
-        
         fig, axs = plt.subplots(1, 2, figsize=(10, 4))
-        axs[0].imshow(attacked_img)
+        axs[0].imshow(attacked)
         axs[0].set_title(f"攻击后图像 ({attack})")
-        axs[0].axis('off')
-        axs[1].imshow(attacked_wm)
+        axs[0].axis("off")
+
+        axs[1].imshow(recovered)
         axs[1].set_title("提取水印")
-        axs[1].axis('off')
+        axs[1].axis("off")
+
         plt.tight_layout()
         plt.show()
-
