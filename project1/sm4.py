@@ -1,7 +1,7 @@
-# sm4_fast.py
 import struct
+import time
 
-# 固定S盒
+# ---------- 常量 ----------
 SBOX = [
     0xd6, 0x90, 0xe9, 0xfe, 0xcc, 0xe1, 0x3d, 0xb7,
     0x16, 0xb6, 0x14, 0xc2, 0x28, 0xfb, 0x2c, 0x05,
@@ -37,94 +37,141 @@ SBOX = [
     0x79, 0xee, 0x5f, 0x3e, 0xd7, 0xcb, 0x39, 0x48
 ]
 
-# 固定参数
 FK = [0xa3b1bac6, 0x56aa3350, 0x677d9197, 0xb27022dc]
-CK = [0x00070e15 + 0x070e151c * i for i in range(32)]  # 简化写法
+CK = [
+    0x00070e15, 0x1c232a31, 0x383f464d, 0x545b6269,
+    0x70777e85, 0x8c939aa1, 0xa8afb6bd, 0xc4cbd2d9,
+    0xe0e7eef5, 0xfc030a11, 0x181f262d, 0x343b4249,
+    0x50575e65, 0x6c737a81, 0x888f969d, 0xa4abb2b9,
+    0xc0c7ced5, 0xdce3eaf1, 0xf8ff060d, 0x141b2229,
+    0x30373e45, 0x4c535a61, 0x686f767d, 0x848b9299,
+    0xa0a7aeb5, 0xbcc3cad1, 0xd8dfe6ed, 0xf4fb0209,
+    0x10171e25, 0x2c333a41, 0x484f565d, 0x646b7279
+]
+
 
 def rotl(x, n):
+    n %= 32
     return ((x << n) | (x >> (32 - n))) & 0xFFFFFFFF
 
+
+# ---------- 原始实现 ----------
+def tau(a):
+    b0 = (a >> 24) & 0xFF
+    b1 = (a >> 16) & 0xFF
+    b2 = (a >> 8) & 0xFF
+    b3 = a & 0xFF
+    return ((SBOX[b0] << 24) | (SBOX[b1] << 16) | (SBOX[b2] << 8) | SBOX[b3])
+
+def L(b):
+    return b ^ rotl(b, 2) ^ rotl(b, 10) ^ rotl(b, 18) ^ rotl(b, 24)
+
+def L_prime(b):
+    return b ^ rotl(b, 13) ^ rotl(b, 23)
+
 def T(x):
-    # inline tau and L
-    a = (
-        SBOX[(x >> 24) & 0xFF] << 24 |
-        SBOX[(x >> 16) & 0xFF] << 16 |
-        SBOX[(x >> 8) & 0xFF] << 8 |
-        SBOX[x & 0xFF]
-    )
-    return a ^ rotl(a, 2) ^ rotl(a, 10) ^ rotl(a, 18) ^ rotl(a, 24)
+    return L(tau(x))
 
-# 优化：T_prime函数手动展开，提高速度
 def T_prime(x):
-    a = (
-        SBOX[(x >> 24) & 0xFF] << 24 |
-        SBOX[(x >> 16) & 0xFF] << 16 |
-        SBOX[(x >> 8) & 0xFF] << 8 |
-        SBOX[x & 0xFF]
-    )
-    return a ^ rotl(a, 13) ^ rotl(a, 23)
-
-# 优化：使用局部变量代替列表操作，减少内存复制
-def encrypt_block(block, rk):
-    X0, X1, X2, X3 = struct.unpack(">4I", block)
-    for i in range(32):
-        tmp = X0 ^ T(X1 ^ X2 ^ X3 ^ rk[i])
-        X0, X1, X2, X3 = X1, X2, X3, tmp
-    return struct.pack(">4I", X3, X2, X1, X0)
-
-def decrypt_block(block, rk):
-    return encrypt_block(block, rk[::-1])
+    return L_prime(tau(x))
 
 def key_expansion(key):
-    # 优化：使用局部变量展开，避免不必要的数组操作
     MK = struct.unpack(">4I", key)
-    K0, K1, K2, K3 = [MK[i] ^ FK[i] for i in range(4)]
+    K = [MK[i] ^ FK[i] for i in range(4)]
     rk = []
     for i in range(32):
-        temp = K1 ^ K2 ^ K3 ^ CK[i]
-        a = (
-            SBOX[(temp >> 24) & 0xFF] << 24 |
-            SBOX[(temp >> 16) & 0xFF] << 16 |
-            SBOX[(temp >> 8) & 0xFF] << 8 |
-            SBOX[temp & 0xFF]
-        )
-        rk_i = K0 ^ a ^ rotl(a, 13) ^ rotl(a, 23)
+        temp = K[1] ^ K[2] ^ K[3] ^ CK[i]
+        rk_i = K[0] ^ T_prime(temp)
         rk.append(rk_i)
-        K0, K1, K2, K3 = K1, K2, K3, rk_i
+        K = [K[1], K[2], K[3], rk_i]
     return rk
 
-def pad(data):
-    pad_len = 16 - (len(data) % 16)
-    return data + bytes([pad_len] * pad_len)
+def encrypt_block(block, rk):
+    X = list(struct.unpack(">4I", block))
+    for i in range(32):
+        tmp = X[0] ^ T(X[1] ^ X[2] ^ X[3] ^ rk[i])
+        X = [X[1], X[2], X[3], tmp]
+    return struct.pack(">4I", X[3], X[2], X[1], X[0])
 
-def unpad(data):
-    pad_len = data[-1]
-    return data[:-pad_len]
+# ---------- T-Table 优化 ----------
+def _build_t_tables():
+    t0 = [0] * 256
+    for b in range(256):
+        a = (SBOX[b] << 24) & 0xFFFFFFFF
+        t0[b] = (a ^ rotl(a, 2) ^ rotl(a, 10) ^ rotl(a, 18) ^ rotl(a, 24)) & 0xFFFFFFFF
+    t1 = [rotl(v, 8) & 0xFFFFFFFF for v in t0]
+    t2 = [rotl(v, 16) & 0xFFFFFFFF for v in t0]
+    t3 = [rotl(v, 24) & 0xFFFFFFFF for v in t0]
+    return t0, t1, t2, t3
 
-# 优化：使用bytearray避免字符串拼接开销
-def sm4_encrypt(data, key):
-    rk = key_expansion(key)
-    data = pad(data)
-    ciphertext = bytearray()
-    for i in range(0, len(data), 16):
-        ciphertext.extend(encrypt_block(data[i:i+16], rk))
-    return bytes(ciphertext)
+def _build_tprime_tables():
+    tp0 = [0] * 256
+    for b in range(256):
+        a = (SBOX[b] << 24) & 0xFFFFFFFF
+        tp0[b] = (a ^ rotl(a, 13) ^ rotl(a, 23)) & 0xFFFFFFFF
+    tp1 = [rotl(v, 8) & 0xFFFFFFFF for v in tp0]
+    tp2 = [rotl(v, 16) & 0xFFFFFFFF for v in tp0]
+    tp3 = [rotl(v, 24) & 0xFFFFFFFF for v in tp0]
+    return tp0, tp1, tp2, tp3
 
-def sm4_decrypt(data, key):
-    rk = key_expansion(key)
-    plaintext = bytearray()
-    for i in range(0, len(data), 16):
-        plaintext.extend(decrypt_block(data[i:i+16], rk))
-    return unpad(bytes(plaintext))
+_T0, _T1, _T2, _T3 = _build_t_tables()
+_TP0, _TP1, _TP2, _TP3 = _build_tprime_tables()
 
-# ==== 测试 ====
+def T_table(x):
+    b0 = (x >> 24) & 0xFF
+    b1 = (x >> 16) & 0xFF
+    b2 = (x >> 8) & 0xFF
+    b3 = x & 0xFF
+    return (_T0[b0] ^ _T1[b1] ^ _T2[b2] ^ _T3[b3]) & 0xFFFFFFFF
+
+def T_prime_table(x):
+    b0 = (x >> 24) & 0xFF
+    b1 = (x >> 16) & 0xFF
+    b2 = (x >> 8) & 0xFF
+    b3 = x & 0xFF
+    return (_TP0[b0] ^ _TP1[b1] ^ _TP2[b2] ^ _TP3[b3]) & 0xFFFFFFFF
+
+def key_expansion_ttable(key):
+    MK = struct.unpack(">4I", key)
+    K = [MK[i] ^ FK[i] for i in range(4)]
+    rk = []
+    for i in range(32):
+        temp = K[1] ^ K[2] ^ K[3] ^ CK[i]
+        rk_i = K[0] ^ T_prime_table(temp)
+        rk.append(rk_i)
+        K = [K[1], K[2], K[3], rk_i]
+    return rk
+
+def encrypt_block_ttable(block, rk):
+    X = list(struct.unpack(">4I", block))
+    for i in range(32):
+        tmp = X[0] ^ T_table(X[1] ^ X[2] ^ X[3] ^ rk[i])
+        X = [X[1], X[2], X[3], tmp]
+    return struct.pack(">4I", X[3], X[2], X[1], X[0])
+
+# ---------- 基准测试 ----------
 if __name__ == "__main__":
     key = b"0123456789abcdef"
-    data = b"Hello SM4  2025summer"
-    print("原文:", data)
+    data = b"Hello SM4 Test!!"   # 多块测试
+    print("数据大小: %.2f KB" % (len(data) / 1024))
 
-    enc = sm4_encrypt(data, key)
-    print("密文:", enc.hex())
+    # 原始实现
+    rk_orig = key_expansion(key)
+    t0 = time.perf_counter()
+    out1 = bytearray()
+    for i in range(0, len(data), 16):
+        out1.extend(encrypt_block(data[i:i+16], rk_orig))
+    t1 = time.perf_counter()
 
-    dec = sm4_decrypt(enc, key)
-    print("解密:", dec)
+    # T-Table 实现
+    rk_t = key_expansion_ttable(key)
+    t2 = time.perf_counter()
+    out2 = bytearray()
+    for i in range(0, len(data), 16):
+        out2.extend(encrypt_block_ttable(data[i:i+16], rk_t))
+    t3 = time.perf_counter()
+
+    print("原始实现耗时: %.6f s" % (t1 - t0))
+    print("T-Table耗时: %.6f s" % (t3 - t2))
+    print("加速比: %.2fx" % ((t1 - t0) / (t3 - t2)))
+    print("加密结果一致:", out1 == out2)
