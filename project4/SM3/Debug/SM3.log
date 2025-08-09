@@ -1,2 +1,4 @@
 ﻿  main.cpp
+G:\Desktop\2025summer\project4\SM3\main.cpp(83,23): warning C4244: “初始化”: 从“uint64_t”转换到“size_t”，可能丢失数据
+G:\Desktop\2025summer\project4\SM3\main.cpp(153,23): warning C4244: “初始化”: 从“uint64_t”转换到“size_t”，可能丢失数据
   SM3.vcxproj -> G:\Desktop\2025summer\project4\SM3\Debug\SM3.exe
