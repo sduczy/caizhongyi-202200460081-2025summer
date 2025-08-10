@@ -41,11 +41,27 @@ class SM2SignatureMisusePOC:
     def verify_signature(self, data: bytes, signature: str) -> bool:
         """验证签名"""
         try:
+            # 预处理签名格式
+            if ',' in signature:
+                # 如果签名包含逗号，转换为标准格式
+                r, s = signature.split(',')
+                signature = r + s
+            
             return self.sm2_crypt.verify(signature, data)
         except:
             try:
+                # 预处理签名格式
+                if ',' in signature:
+                    r, s = signature.split(',')
+                    signature = r + s
+                
                 return self.sm2_crypt.verify(signature, data, user_id='1234567812345678')
             except:
+                # 预处理签名格式
+                if ',' in signature:
+                    r, s = signature.split(',')
+                    signature = r + s
+                
                 return self.sm2_crypt.verify(signature, data)
 
 class NonceReuseAttack:
@@ -101,9 +117,14 @@ class NonceReuseAttack:
                                            sig1: str, sig2: str, k: str) -> Optional[str]:
         """从随机数重用中恢复私钥"""
         try:
-            # 解析签名 (r, s)
-            r1, s1 = sig1.split(',')
-            r2, s2 = sig2.split(',')
+            # 解析签名 (r, s) - 检查签名格式
+            if ',' in sig1 and ',' in sig2:
+                r1, s1 = sig1.split(',')
+                r2, s2 = sig2.split(',')
+            else:
+                # 如果没有逗号，假设签名是128字符的十六进制字符串，前64位是r，后64位是s
+                r1, s1 = sig1[:64], sig1[64:]
+                r2, s2 = sig2[:64], sig2[64:]
             
             r1, s1 = int(r1, 16), int(s1, 16)
             r2, s2 = int(r2, 16), int(s2, 16)
@@ -192,8 +213,13 @@ class PredictableNonceAttack:
     def recover_private_key_from_predictable_nonce(msg: bytes, signature: str, k: str) -> Optional[str]:
         """从可预测随机数中恢复私钥"""
         try:
-            # 解析签名
-            r, s = signature.split(',')
+            # 解析签名 - 检查签名格式
+            if ',' in signature:
+                r, s = signature.split(',')
+            else:
+                # 如果没有逗号，假设签名是128字符的十六进制字符串，前64位是r，后64位是s
+                r, s = signature[:64], signature[64:]
+            
             r, s = int(r, 16), int(s, 16)
             
             # 计算消息哈希
@@ -255,7 +281,7 @@ class SignatureVerificationBypass:
         # 方法1: 构造无效的r值
         fake_r = "0" * 64  # 全零的r值
         fake_s = func.random_hex(64)
-        fake_signature1 = f"{fake_r},{fake_s}"
+        fake_signature1 = fake_r + fake_s  # 移除逗号，直接拼接
         
         print(f"伪造签名1 (r=0): {fake_signature1}")
         print(f"验证结果: {poc.verify_signature(msg, fake_signature1)}")
@@ -263,7 +289,7 @@ class SignatureVerificationBypass:
         # 方法2: 构造无效的s值
         real_r = func.random_hex(64)
         fake_s2 = "0" * 64  # 全零的s值
-        fake_signature2 = f"{real_r},{fake_s2}"
+        fake_signature2 = real_r + fake_s2  # 移除逗号，直接拼接
         
         print(f"伪造签名2 (s=0): {fake_signature2}")
         print(f"验证结果: {poc.verify_signature(msg, fake_signature2)}")

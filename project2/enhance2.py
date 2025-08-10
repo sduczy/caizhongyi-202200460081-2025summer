@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+from matplotlib.font_manager import FontProperties
 
 class WatermarkProcessor:
     def __init__(self, host_channel, wm_channel, blk_size=8, strength=30):
@@ -96,7 +97,6 @@ def test_robustness(attacked_img, processors, wm_shapes):
         recovered.append(wm.astype(np.uint8))
     return cv2.merge(recovered)
 
-# 主流程
 if __name__ == "__main__":
     strength = 10
     blk_size = 8
@@ -105,12 +105,20 @@ if __name__ == "__main__":
 
     host = load_image(host_path)
     wm = load_image(wm_path)
-    wm_bin = np.where(wm < np.mean(wm, axis=(0,1)), 0, 1)
+
+    # 缩放水印到宿主块数大小，避免断言错误
+    wm_resized = cv2.resize(wm, (host.shape[1]//blk_size, host.shape[0]//blk_size))
+
+    # 水印二值化
+    wm_bin = np.where(wm_resized < np.mean(wm_resized, axis=(0,1)), 0, 1)
 
     yuv = cv2.cvtColor(host, cv2.COLOR_RGB2YUV)
     watermarked_channels = []
     recovered_channels = []
     processors = []
+
+    # 设置中文字体（Windows路径，替换为你系统对应字体路径）
+    font = FontProperties(fname="C:/Windows/Fonts/simhei.ttf", size=14)
 
     for ch in range(3):
         proc = WatermarkProcessor(yuv[..., ch], wm_bin[..., ch], blk_size, strength)
@@ -126,13 +134,13 @@ if __name__ == "__main__":
     final_img = cv2.merge(watermarked_channels)
     final_wm = cv2.merge(recovered_channels)
 
-    # 展示原始水印与水印图像
+    # 显示原始、水印、嵌入和提取水印图像，带中文标题
     fig, axs = plt.subplots(2, 2, figsize=(10, 8))
     titles = ["原图", "水印", "嵌入图", "提取水印"]
     images = [host, wm, final_img, final_wm]
     for ax, img, title in zip(axs.flat, images, titles):
         ax.imshow(img)
-        ax.set_title(title)
+        ax.set_title(title, fontproperties=font)
         ax.axis("off")
     plt.tight_layout()
     plt.show()
@@ -147,11 +155,11 @@ if __name__ == "__main__":
 
         fig, axs = plt.subplots(1, 2, figsize=(10, 4))
         axs[0].imshow(attacked)
-        axs[0].set_title(f"攻击后图像 ({attack})")
+        axs[0].set_title(f"攻击后图像 ({attack})", fontproperties=font)
         axs[0].axis("off")
 
         axs[1].imshow(recovered)
-        axs[1].set_title("提取水印")
+        axs[1].set_title("提取水印", fontproperties=font)
         axs[1].axis("off")
 
         plt.tight_layout()
