@@ -22,6 +22,8 @@
 
 6、使用bytearray避免字符串拼接开销
 
+7、使用T-Table优化
+
 ## project2:
 
 ### 题目：
