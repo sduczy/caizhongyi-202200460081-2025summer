@@ -62,20 +62,6 @@
 2. circom说明文档https://docs.circom.io/
 3. circom电路样例 https://github.com/iden3/circomlib
 
-### 我的优化：
-
-1、
-
-2、
-
-3、
-
-4、
-
-5、
-
-6、
-
 ## project4:
 
 ### 题目：
