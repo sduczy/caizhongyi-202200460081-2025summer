@@ -7,6 +7,10 @@ SM2签名算法误用测试脚本
 
 from gmssl import sm2, func
 import hashlib
+from sm2_attack_utils import (
+    recover_private_key_from_nonce_reuse as util_recover_from_reuse,
+    recover_private_key_from_predictable_nonce as util_recover_from_pred,
+)
 
 def test_nonce_reuse_attack():
     """测试随机数重用攻击"""
@@ -63,53 +67,8 @@ def test_nonce_reuse_attack():
         print(f"签名过程中出错: {e}")
 
 def recover_private_key_from_nonce_reuse(msg1, msg2, sig1, sig2, k):
-    """从随机数重用中恢复私钥"""
     try:
-        # 解析签名 (r, s)
-        if ',' in sig1 and ',' in sig2:
-            r1, s1 = sig1.split(',')
-            r2, s2 = sig2.split(',')
-            
-            r1, s1 = int(r1, 16), int(s1, 16)
-            r2, s2 = int(r2, 16), int(s2, 16)
-            
-            # 计算消息哈希
-            h1 = int(hashlib.sha256(msg1).hexdigest(), 16)
-            h2 = int(hashlib.sha256(msg2).hexdigest(), 16)
-            
-            # SM2椭圆曲线参数
-            n = 0xFFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123
-            
-            # 计算私钥: d = (s1 * h2 - s2 * h1) / (r * (s1 - s2)) mod n
-            k_int = int(k, 16)
-            numerator = (s1 * h2 - s2 * h1) % n
-            denominator = (r1 * (s1 - s2)) % n
-            
-            # 计算模逆
-            def mod_inverse(a, m):
-                def extended_gcd(a, b):
-                    if a == 0:
-                        return b, 0, 1
-                    gcd, x1, y1 = extended_gcd(b % a, a)
-                    x = y1 - (b // a) * x1
-                    y = x1
-                    return gcd, x, y
-                
-                gcd, x, _ = extended_gcd(a, m)
-                if gcd != 1:
-                    raise ValueError("模逆不存在")
-                return x % m
-            
-            try:
-                inv_denominator = mod_inverse(denominator, n)
-                private_key = (numerator * inv_denominator) % n
-                return hex(private_key)[2:].zfill(64)
-            except ValueError:
-                return None
-        else:
-            print("签名格式不正确，无法解析")
-            return None
-                
+        return util_recover_from_reuse(msg1, msg2, sig1, sig2)
     except Exception as e:
         print(f"私钥恢复过程中出错: {e}")
         return None
@@ -163,50 +122,8 @@ def test_predictable_nonce_attack():
         print(f"签名过程中出错: {e}")
 
 def recover_private_key_from_predictable_nonce(msg, signature, k):
-    """从可预测随机数中恢复私钥"""
     try:
-        # 解析签名
-        if ',' in signature:
-            r, s = signature.split(',')
-            r, s = int(r, 16), int(s, 16)
-            
-            # 计算消息哈希
-            h = int(hashlib.sha256(msg).hexdigest(), 16)
-            
-            # SM2椭圆曲线参数
-            n = 0xFFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123
-            
-            k_int = int(k, 16)
-            
-            # 计算私钥: d = (k * s - h) / r mod n
-            numerator = (k_int * s - h) % n
-            denominator = r
-            
-            # 计算模逆
-            def mod_inverse(a, m):
-                def extended_gcd(a, b):
-                    if a == 0:
-                        return b, 0, 1
-                    gcd, x1, y1 = extended_gcd(b % a, a)
-                    x = y1 - (b // a) * x1
-                    y = x1
-                    return gcd, x, y
-                
-                gcd, x, _ = extended_gcd(a, m)
-                if gcd != 1:
-                    raise ValueError("模逆不存在")
-                return x % m
-            
-            try:
-                inv_denominator = mod_inverse(denominator, n)
-                private_key = (numerator * inv_denominator) % n
-                return hex(private_key)[2:].zfill(64)
-            except ValueError:
-                return None
-        else:
-            print("签名格式不正确，无法解析")
-            return None
-                
+        return util_recover_from_pred(msg, signature, k)
     except Exception as e:
         print(f"私钥恢复过程中出错: {e}")
         return None

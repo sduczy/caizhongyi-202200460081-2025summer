@@ -54,6 +54,16 @@ python test_sm2_attacks.py
 
 打开 `SM2_Attack_Analysis.md` 文件查看详细的数学原理和攻击推导过程。
 
+### 4. 运行性能基准测试（对比优化效果）
+
+```bash
+python -m project5.benchmark_sm2
+```
+
+说明：
+- 当 `project5/hggm/hggm/SM2_kG.bin` 文件不存在时，SM2点乘走普通路径；存在该文件时，会启用预计算查表加速。
+- 基准脚本会先测“无预计算”，再测“有预计算”，输出每阶段吞吐量，便于直观对比优化效果。
+
 ## 攻击方法详解
 
 ### 随机数重用攻击
