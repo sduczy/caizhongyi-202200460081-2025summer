@@ -96,22 +96,58 @@ def encrypt_block(block, rk):
 # ---------- T-Table 优化 ----------
 def _build_t_tables():
     t0 = [0] * 256
+    t1 = [0] * 256
+    t2 = [0] * 256
+    t3 = [0] * 256
+    
     for b in range(256):
-        a = (SBOX[b] << 24) & 0xFFFFFFFF
-        t0[b] = (a ^ rotl(a, 2) ^ rotl(a, 10) ^ rotl(a, 18) ^ rotl(a, 24)) & 0xFFFFFFFF
-    t1 = [rotl(v, 8) & 0xFFFFFFFF for v in t0]
-    t2 = [rotl(v, 16) & 0xFFFFFFFF for v in t0]
-    t3 = [rotl(v, 24) & 0xFFFFFFFF for v in t0]
+        # 为每个字节位置构建正确的表
+        sbox_val = SBOX[b]
+        
+        # t0: 最高字节位置
+        val = (sbox_val << 24) & 0xFFFFFFFF
+        t0[b] = (val ^ rotl(val, 2) ^ rotl(val, 10) ^ rotl(val, 18) ^ rotl(val, 24)) & 0xFFFFFFFF
+        
+        # t1: 次高字节位置
+        val = (sbox_val << 16) & 0xFFFFFFFF
+        t1[b] = (val ^ rotl(val, 2) ^ rotl(val, 10) ^ rotl(val, 18) ^ rotl(val, 24)) & 0xFFFFFFFF
+        
+        # t2: 次低字节位置
+        val = (sbox_val << 8) & 0xFFFFFFFF
+        t2[b] = (val ^ rotl(val, 2) ^ rotl(val, 10) ^ rotl(val, 18) ^ rotl(val, 24)) & 0xFFFFFFFF
+        
+        # t3: 最低字节位置
+        val = sbox_val & 0xFFFFFFFF
+        t3[b] = (val ^ rotl(val, 2) ^ rotl(val, 10) ^ rotl(val, 18) ^ rotl(val, 24)) & 0xFFFFFFFF
+    
     return t0, t1, t2, t3
 
 def _build_tprime_tables():
     tp0 = [0] * 256
+    tp1 = [0] * 256
+    tp2 = [0] * 256
+    tp3 = [0] * 256
+    
     for b in range(256):
-        a = (SBOX[b] << 24) & 0xFFFFFFFF
-        tp0[b] = (a ^ rotl(a, 13) ^ rotl(a, 23)) & 0xFFFFFFFF
-    tp1 = [rotl(v, 8) & 0xFFFFFFFF for v in tp0]
-    tp2 = [rotl(v, 16) & 0xFFFFFFFF for v in tp0]
-    tp3 = [rotl(v, 24) & 0xFFFFFFFF for v in tp0]
+        # 为每个字节位置构建正确的表
+        sbox_val = SBOX[b]
+        
+        # tp0: 最高字节位置
+        val = (sbox_val << 24) & 0xFFFFFFFF
+        tp0[b] = (val ^ rotl(val, 13) ^ rotl(val, 23)) & 0xFFFFFFFF
+        
+        # tp1: 次高字节位置
+        val = (sbox_val << 16) & 0xFFFFFFFF
+        tp1[b] = (val ^ rotl(val, 13) ^ rotl(val, 23)) & 0xFFFFFFFF
+        
+        # tp2: 次低字节位置
+        val = (sbox_val << 8) & 0xFFFFFFFF
+        tp2[b] = (val ^ rotl(val, 13) ^ rotl(val, 23)) & 0xFFFFFFFF
+        
+        # tp3: 最低字节位置
+        val = sbox_val & 0xFFFFFFFF
+        tp3[b] = (val ^ rotl(val, 13) ^ rotl(val, 23)) & 0xFFFFFFFF
+    
     return tp0, tp1, tp2, tp3
 
 _T0, _T1, _T2, _T3 = _build_t_tables()
@@ -149,18 +185,37 @@ def encrypt_block_ttable(block, rk):
         X = [X[1], X[2], X[3], tmp]
     return struct.pack(">4I", X[3], X[2], X[1], X[0])
 
+# 添加解密函数（SM4是对称加密，解密用相同的轮密钥但顺序相反）
+def decrypt_block(block, rk):
+    X = list(struct.unpack(">4I", block))
+    for i in range(32):
+        tmp = X[0] ^ T(X[1] ^ X[2] ^ X[3] ^ rk[31-i])  # 使用反向轮密钥
+        X = [X[1], X[2], X[3], tmp]
+    return struct.pack(">4I", X[3], X[2], X[1], X[0])
+
+def decrypt_block_ttable(block, rk):
+    X = list(struct.unpack(">4I", block))
+    for i in range(32):
+        tmp = X[0] ^ T_table(X[1] ^ X[2] ^ X[3] ^ rk[31-i])  # 使用反向轮密钥
+        X = [X[1], X[2], X[3], tmp]
+    return struct.pack(">4I", X[3], X[2], X[1], X[0])
+
 # ---------- 基准测试 ----------
 if __name__ == "__main__":
     key = b"0123456789abcdef"
     data = b"Hello SM4 Test!!"   # 多块测试
     print("数据大小: %.2f KB" % (len(data) / 1024))
+    print("原始数据:", data)
 
     # 原始实现
     rk_orig = key_expansion(key)
     t0 = time.perf_counter()
     out1 = bytearray()
     for i in range(0, len(data), 16):
-        out1.extend(encrypt_block(data[i:i+16], rk_orig))
+        block = data[i:i+16]
+        if len(block) < 16:  # 填充最后一个块
+            block = block + b'\x00' * (16 - len(block))
+        out1.extend(encrypt_block(block, rk_orig))
     t1 = time.perf_counter()
 
     # T-Table 实现
@@ -168,10 +223,39 @@ if __name__ == "__main__":
     t2 = time.perf_counter()
     out2 = bytearray()
     for i in range(0, len(data), 16):
-        out2.extend(encrypt_block_ttable(data[i:i+16], rk_t))
+        block = data[i:i+16]
+        if len(block) < 16:  # 填充最后一个块
+            block = block + b'\x00' * (16 - len(block))
+        out2.extend(encrypt_block_ttable(block, rk_t))
     t3 = time.perf_counter()
 
     print("原始实现耗时: %.6f s" % (t1 - t0))
     print("T-Table耗时: %.6f s" % (t3 - t2))
     print("加速比: %.2fx" % ((t1 - t0) / (t3 - t2)))
     print("加密结果一致:", out1 == out2)
+    
+    # 测试解密功能
+    print("\n测试解密功能:")
+    decrypted1 = bytearray()
+    decrypted2 = bytearray()
+    
+    # 解密原始实现的结果
+    for i in range(0, len(out1), 16):
+        decrypted1.extend(decrypt_block(out1[i:i+16], rk_orig))
+    
+    # 解密T-Table实现的结果  
+    for i in range(0, len(out2), 16):
+        decrypted2.extend(decrypt_block_ttable(out2[i:i+16], rk_t))
+    
+    print("原始实现解密结果:", decrypted1)
+    print("T-Table解密结果:", decrypted2)
+    print("解密结果一致:", decrypted1 == decrypted2)
+    print("与原数据一致:", decrypted1[:len(data)] == data)
+    
+    # 验证轮密钥一致性
+    print("\n验证轮密钥一致性:")
+    print("轮密钥一致:", rk_orig == rk_t)
+    if rk_orig != rk_t:
+        print("前5个轮密钥对比:")
+        for i in range(min(5, len(rk_orig))):
+            print(f"  rk[{i}]: 原始={rk_orig[i]:08x}, T-Table={rk_t[i]:08x}")
