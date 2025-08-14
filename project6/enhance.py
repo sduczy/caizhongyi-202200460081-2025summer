@@ -1,8 +1,6 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-优化版 PoC: DDH-based Private Intersection-Sum (Figure 2) - demo implementation
-优化点摘要：
+优化版 PoC: DDH-based Private Intersection-Sum (Figure 2)
+优化点：
  - 使用 secrets 作为安全随机源
  - 使用 Miller-Rabin 生成/检测素数（可选位长）
  - Paillier keygen 使用真实随机素数（可配置位长）
@@ -18,7 +16,7 @@ import math
 from typing import List, Tuple, Optional
 
 # -------------------------
-# 工具：扩展欧几里得与模逆
+# 扩展欧几里得与模逆
 # -------------------------
 def egcd(a: int, b: int) -> Tuple[int, int, int]:
     if b == 0:
@@ -72,7 +70,7 @@ def gen_prime(bits: int = 512) -> int:
             return candidate
 
 # -------------------------
-# 优化版 Paillier（教学 PoC）
+# 优化版 Paillier
 # -------------------------
 class PaillierKeypair:
     def __init__(self, n: int, g: int, lam: int, mu: int):

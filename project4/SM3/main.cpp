@@ -5,29 +5,48 @@
 #include <cstdint>
 #include <cstdio>
 
+/*
+ * SM3å“ˆå¸Œç®—æ³•å®ç°
+ * 
+ * SM3æ˜¯ä¸­å›½å›½å®¶å¯†ç ç®¡ç†å±€å‘å¸ƒçš„å¯†ç æ‚å‡‘ç®—æ³•ï¼Œè¾“å‡ºé•¿åº¦ä¸º256ä½
+ * æœ¬å®ç°åŒ…å«åŸå§‹ç‰ˆæœ¬å’Œä¼˜åŒ–ç‰ˆæœ¬ï¼Œç”¨äºæ€§èƒ½å¯¹æ¯”
+ * 
+ * ä¸»è¦ç‰¹ç‚¹ï¼š
+ * 1. åŸºäºMerkle-Damgardç»“æ„
+ * 2. æ¶ˆæ¯å—é•¿åº¦512ä½
+ * 3. è¾“å‡ºé•¿åº¦256ä½
+ * 4. ä½¿ç”¨64è½®å‹ç¼©å‡½æ•°
+ */
+
+// 32ä½å·¦å¾ªç¯ç§»ä½å®å®šä¹‰
 #define ROTL32(x,n) (((x) << (n)) | ((x) >> (32 - (n))))
 
-// ³õÊ¼ÏòÁ¿
+
+// SM3ç®—æ³•çš„åˆå§‹å‘é‡IVï¼ˆ8ä¸ª32ä½å­—ï¼‰
 static const uint32_t IV[8] = {
     0x7380166f,0x4914b2b9,0x172442d7,0xda8a0600,
     0x5a63e28c,0x2f5f1b22,0x3b101e6d,0x9b4e430d
 };
 
-// »ù±¾±ä»»£¨inline / ºê£©
+
+// ç½®æ¢å‡½æ•°P0å’ŒP1ï¼Œç”¨äºæ¶ˆæ¯æ‰©å±•å’Œå‹ç¼©
 inline uint32_t P0_u(uint32_t x){ return x ^ ROTL32(x,9) ^ ROTL32(x,17); }
 inline uint32_t P1_u(uint32_t x){ return x ^ ROTL32(x,15) ^ ROTL32(x,23); }
 #define P0(x) P0_u(x)
 #define P1(x) P1_u(x)
 
-// FF, GG °´ j ·Ö¶Î
+
+// å¸ƒå°”å‡½æ•°FFå’ŒGGï¼Œç”¨äºå‹ç¼©å‡½æ•°
+// FF: å‰16è½®ä½¿ç”¨XORï¼Œå48è½®ä½¿ç”¨MAJ
 inline uint32_t FF(uint32_t x,uint32_t y,uint32_t z,int j){
     return (j<=15) ? (x ^ y ^ z) : ((x & y) | (x & z) | (y & z));
 }
+// GG: å‰16è½®ä½¿ç”¨XORï¼Œå48è½®ä½¿ç”¨CHO
 inline uint32_t GG(uint32_t x,uint32_t y,uint32_t z,int j){
     return (j<=15) ? (x ^ y ^ z) : ((x & y) | ((~x) & z));
 }
 
-// T ³£Á¿»ùÖµ
+
 static const uint32_t T_BASE[64] = {
     // 0..15 : 0x79cc4519
     0x79cc4519,0x79cc4519,0x79cc4519,0x79cc4519,0x79cc4519,0x79cc4519,0x79cc4519,0x79cc4519,
@@ -41,7 +60,7 @@ static const uint32_t T_BASE[64] = {
     0x7a879d8a,0x7a879d8a,0x7a879d8a,0x7a879d8a,0x7a879d8a,0x7a879d8a,0x7a879d8a,0x7a879d8a
 };
 
-// ---------------- Ô­·½°¸£¨Ö±½ÓÊµÏÖ£¬Í»³öÇåÎú£© ----------------
+
 void expand_orig(const uint8_t* block, uint32_t W[68]){
     for(int i=0;i<16;i++){
         W[i] = (uint32_t(block[4*i]) << 24) | (uint32_t(block[4*i+1]) << 16) |
@@ -76,7 +95,6 @@ void compress_orig(uint32_t V[8], const uint8_t block[64]){
 }
 
 void sm3_original(const uint8_t* input, size_t len, uint8_t out[32]){
-    // Ìî³ä£¨±ê×¼´ó¶Ë length£©
     uint64_t l = (uint64_t)len * 8;
     size_t k = (448 - (l + 1)) % 512;
     if ((l + 1) % 512 > 448) k += 512;
@@ -101,12 +119,6 @@ void sm3_original(const uint8_t* input, size_t len, uint8_t out[32]){
     }
 }
 
-// ---------------- ÓÅ»¯·½°¸£¨ÔÚ±£Ö¤µÈ¼ÛµÄÇ°ÌáÏÂ¼ÓËÙ£© ----------------
-
-// ÓÅ»¯Ë¼Â·£º
-// 1) Ô¤ÏÈ¼ÆËã rotT[j] = ROTL32(T_BASE[j], j) ²¢»º´æ£»
-// 2) ½«ÏûÏ¢À©Õ¹ºÍ W1 ¼ÆËãºÏ²¢ÎªÒ»¸öº¯ÊıÊä³ö W ºÍ W1£»
-// 3) inline / ÉÙÁ¿ÁÙÊ±±äÁ¿£¬¼õÉÙÑ­»·ÄÚÖØ¸´¹¤×÷¡£
 
 void expand_opt(const uint8_t* block, uint32_t W[68], uint32_t W1[64]){
     for(int i=0;i<16;i++){
@@ -128,7 +140,7 @@ void compress_opt(uint32_t V[8], const uint8_t block[64], const uint32_t rotT[64
     uint32_t E=V[4], F=V[5], G=V[6], H=V[7];
 
     for(int j=0;j<64;j++){
-        // Ê¹ÓÃÔ¤¼ÆËã rotT[j]£¨±ÜÃâÑ­»·ÄÚÃ¿´Î ROTL(T_BASE[j], j)£©
+
         uint32_t SS1 = ROTL32((ROTL32(A,12) + E + rotT[j]) & 0xFFFFFFFF, 7);
         uint32_t SS2 = SS1 ^ ROTL32(A,12);
         uint32_t TT1 = (FF(A,B,C,j) + D + SS2 + W1[j]) & 0xFFFFFFFF;
@@ -142,11 +154,11 @@ void compress_opt(uint32_t V[8], const uint8_t block[64], const uint32_t rotT[64
 }
 
 void sm3_optimized(const uint8_t* input, size_t len, uint8_t out[32]){
-    // ÏÈ×¼±¸ rotT ±í
+    // é¢„è®¡ç®— rotT è¡¨
     uint32_t rotT[64];
     for(int j=0;j<64;j++) rotT[j] = ROTL32(T_BASE[j], j);
 
-    // Ìî³ä
+    // å¡«å……
     uint64_t l = (uint64_t)len * 8;
     size_t k = (448 - (l + 1)) % 512;
     if ((l + 1) % 512 > 448) k += 512;
@@ -171,7 +183,7 @@ void sm3_optimized(const uint8_t* input, size_t len, uint8_t out[32]){
     }
 }
 
-// ---------------- ¸¨Öú£º´òÓ¡Óë²âÊÔ ----------------
+// ---------------- åå…­è¿›åˆ¶æ‰“å°å‡½æ•° ----------------
 void print_hex(const uint8_t* d){
     for(int i=0;i<32;i++) printf("%02x", d[i]);
     printf("\n");
@@ -181,28 +193,28 @@ int main(){
     const char* msg = "abc";
     uint8_t out1[32], out2[32];
 
-    // ÔËĞĞÔ­·½°¸
+    // æµ‹è¯•åŸå§‹ç®—æ³•
     auto t1 = std::chrono::high_resolution_clock::now();
     sm3_original(reinterpret_cast<const uint8_t*>(msg), strlen(msg), out1);
     auto t2 = std::chrono::high_resolution_clock::now();
     double us_orig = std::chrono::duration<double, std::micro>(t2 - t1).count();
 
-    // ÔËĞĞÓÅ»¯·½°¸
+    // æµ‹è¯•ä¼˜åŒ–ç®—æ³•
     auto t3 = std::chrono::high_resolution_clock::now();
     sm3_optimized(reinterpret_cast<const uint8_t*>(msg), strlen(msg), out2);
     auto t4 = std::chrono::high_resolution_clock::now();
     double us_opt = std::chrono::duration<double, std::micro>(t4 - t3).count();
 
-    std::cout << "Ô­·½°¸Êä³ö: "; print_hex(out1);
-    std::cout << "Ô­·½°¸ºÄÊ±(us): " << us_orig << std::endl;
-    std::cout << "ÓÅ»¯·½°¸Êä³ö: "; print_hex(out2);
-    std::cout << "ÓÅ»¯·½°¸ºÄÊ±(us): " << us_opt << std::endl;
+    std::cout << "åŸå§‹ç®—æ³•ç»“æœ: "; print_hex(out1);
+    std::cout << "åŸå§‹ç®—æ³•è€—æ—¶(us): " << us_orig << std::endl;
+    std::cout << "ä¼˜åŒ–ç®—æ³•ç»“æœ: "; print_hex(out2);
+    std::cout << "ä¼˜åŒ–ç®—æ³•è€—æ—¶(us): " << us_opt << std::endl;
 
-    if (memcmp(out1,out2,32)==0) std::cout << "Á½¸ö·½°¸Êä³öÒ»ÖÂ (ÕıÈ·ĞÔÍ¨¹ı)" << std::endl;
-    else std::cout << "Á½¸ö·½°¸Êä³ö²»Ò»ÖÂ£¡" << std::endl;
+    if (memcmp(out1,out2,32)==0) std::cout << "ä¸¤ä¸ªç»“æœå®Œå…¨ä¸€è‡´ (æ­£ç¡®æ€§é€šè¿‡)" << std::endl;
+    else std::cout << "ä¸¤ä¸ªç»“æœä¸ä¸€è‡´ï¼" << std::endl;
 
-    // ´òÓ¡±ê×¼ÏòÁ¿ÒÔ±ã±È¶Ô£¨SM3( "abc" )±ê×¼Êä³ö£©
-    std::cout << "±ê×¼ÏòÁ¿: 66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0" << std::endl;
+    // æ‰“å°æ ‡å‡†ç»“æœç”¨äºå¯¹æ¯”ï¼ŒSM3( "abc" )çš„æ ‡å‡†ç»“æœ
+    std::cout << "æ ‡å‡†ç»“æœ: 66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0" << std::endl;
 
     return 0;
 }
